@@ -6,7 +6,14 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agenttrace.core import changed_files_from_status, generate_run_id, read_json, write_json
+from agenttrace.core import (
+    changed_files_from_status,
+    evaluate_evidence_policy,
+    generate_run_id,
+    normalize_evidence_policy,
+    read_json,
+    write_json,
+)
 
 
 class CoreTests(unittest.TestCase):
@@ -32,6 +39,37 @@ class CoreTests(unittest.TestCase):
     def test_changed_files_from_status_handles_renames(self) -> None:
         status = " M src/app.py\n?? notes.md\nR  old.txt -> new.txt\n"
         self.assertEqual(changed_files_from_status(status), ["new.txt", "notes.md", "src/app.py"])
+
+    def test_normalize_evidence_policy_uses_defaults(self) -> None:
+        self.assertEqual(
+            normalize_evidence_policy({"require_reviews": True}),
+            {
+                "require_tests": True,
+                "require_reviews": True,
+                "require_clean_snapshot": False,
+                "fail_on_failed_tests": True,
+            },
+        )
+
+    def test_evaluate_evidence_policy_reports_required_failures(self) -> None:
+        result = evaluate_evidence_policy(
+            {
+                "latest_snapshot": {"dirty": True},
+                "tests": [{"exit_code": 1}],
+                "reviews": [],
+            },
+            {
+                "require_tests": True,
+                "require_reviews": True,
+                "require_clean_snapshot": True,
+                "fail_on_failed_tests": True,
+            },
+        )
+        self.assertFalse(result["passed"])
+        self.assertEqual(
+            [failure["name"] for failure in result["failures"]],
+            ["review evidence recorded", "latest snapshot clean", "recorded tests passed"],
+        )
 
 
 if __name__ == "__main__":

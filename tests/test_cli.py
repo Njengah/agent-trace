@@ -52,6 +52,7 @@ class CliTests(unittest.TestCase):
         result = self.run_cli("init")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.repo / ".agenttrace" / "config.json").exists())
+        self.assertIn("require_tests", (self.repo / ".agenttrace" / "config.json").read_text(encoding="utf-8"))
 
         result = self.run_cli("start", "change readme", "--tool", "Codex", "--model", "gpt-test")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -76,7 +77,33 @@ class CliTests(unittest.TestCase):
         text = report_path.read_text(encoding="utf-8")
         self.assertIn("AgentTrace Report", text)
         self.assertIn("change readme", text)
+        self.assertIn("Evidence Policy", text)
+        self.assertIn("Status: `pass`", text)
         self.assertIn("Test Evidence", text)
+
+    def test_policy_command_updates_requirements(self) -> None:
+        self.assertEqual(self.run_cli("init").returncode, 0)
+
+        result = self.run_cli("policy", "--require-reviews", "--require-clean-snapshot")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("- require_reviews: true", result.stdout)
+        self.assertIn("- require_clean_snapshot: true", result.stdout)
+
+        result = self.run_cli("policy")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("- require_tests: true", result.stdout)
+        self.assertIn("- require_reviews: true", result.stdout)
+
+    def test_report_marks_failed_policy(self) -> None:
+        self.assertEqual(self.run_cli("init").returncode, 0)
+        self.assertEqual(self.run_cli("policy", "--require-reviews").returncode, 0)
+        self.assertEqual(self.run_cli("start", "policy failure").returncode, 0)
+        result = self.run_cli("report")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = Path(result.stdout.strip()).read_text(encoding="utf-8")
+        self.assertIn("Evidence Policy", text)
+        self.assertIn("Status: `fail`", text)
+        self.assertIn("Evidence policy failed", text)
 
     def test_start_requires_init(self) -> None:
         result = self.run_cli("start", "missing init")
