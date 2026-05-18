@@ -10,8 +10,10 @@ from .core import (
     add_project_root,
     add_review,
     add_test,
+    active_github_pr,
     git_root,
     init_workspace,
+    link_github_pr,
     read_evidence_policy,
     report,
     snapshot,
@@ -61,6 +63,14 @@ def build_parser() -> argparse.ArgumentParser:
     policy_parser.add_argument("--fail-on-failed-tests", action="store_true", default=None, help="Fail policy when recorded tests fail.")
     policy_parser.add_argument("--allow-failed-tests", action="store_false", dest="fail_on_failed_tests", help="Do not fail policy when recorded tests fail.")
     policy_parser.set_defaults(func=cmd_policy)
+
+    pr_parser = subcommands.add_parser("pr", help="Link or show a GitHub pull request for the active run.")
+    pr_parser.add_argument("identifier", nargs="?", help="GitHub PR number or URL.")
+    pr_parser.add_argument("--title", help="Optional PR title to store in the run metadata.")
+    pr_parser.add_argument("--base", help="Optional base branch to store in the run metadata.")
+    pr_parser.add_argument("--head", help="Optional head branch to store in the run metadata.")
+    pr_parser.add_argument("--remote", default="origin", help="Git remote used when identifier is a number.")
+    pr_parser.set_defaults(func=cmd_pr)
 
     report_parser = subcommands.add_parser("report", help="Generate a Markdown report for the active run.")
     report_parser.set_defaults(func=cmd_report)
@@ -120,6 +130,33 @@ def cmd_policy(args: argparse.Namespace) -> int:
     print("Evidence policy:")
     for key in sorted(policy):
         print(f"- {key}: {str(policy[key]).lower()}")
+    return 0
+
+
+def cmd_pr(args: argparse.Namespace) -> int:
+    repo = workspace_repo_from_cwd()
+    if args.identifier:
+        pr = link_github_pr(
+            repo,
+            args.identifier,
+            title=args.title,
+            base=args.base,
+            head=args.head,
+            remote=args.remote,
+        )
+        print(f"Linked GitHub PR: {pr['url']}")
+        return 0
+    pr = active_github_pr(repo)
+    if not pr:
+        print("No GitHub PR linked.")
+        return 0
+    print(f"GitHub PR: {pr['url']}")
+    if pr.get("title"):
+        print(f"Title: {pr['title']}")
+    if pr.get("base"):
+        print(f"Base: {pr['base']}")
+    if pr.get("head"):
+        print(f"Head: {pr['head']}")
     return 0
 
 

@@ -19,6 +19,12 @@ DEFAULT_EVIDENCE_POLICY = {
     "require_clean_snapshot": False,
     "fail_on_failed_tests": True,
 }
+GITHUB_PR_URL_PATTERN = re.compile(r"^https://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)(?:[/?#].*)?$")
+GITHUB_REMOTE_PATTERNS = [
+    re.compile(r"^https://github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$"),
+    re.compile(r"^git@github\.com:([^/\s]+)/([^/\s]+?)(?:\.git)?$"),
+    re.compile(r"^ssh://git@github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?$"),
+]
 
 
 class AgentTraceError(Exception):
@@ -90,6 +96,76 @@ def git_value(repo: Path, args: list[str], default: str | None = None) -> str | 
         return default
     value = result.stdout.strip()
     return value if value else default
+
+
+def parse_github_pr_identifier(identifier: str) -> dict[str, Any]:
+    value = identifier.strip()
+    if not value:
+        raise AgentTraceError("GitHub PR identifier cannot be empty.")
+    if value.isdigit():
+        return {"number": int(value)}
+    match = GITHUB_PR_URL_PATTERN.match(value)
+    if not match:
+        raise AgentTraceError("Expected a GitHub PR number or URL like https://github.com/owner/repo/pull/123.")
+    owner, name, number = match.groups()
+    return {
+        "owner": owner,
+        "repo": name,
+        "number": int(number),
+        "url": f"https://github.com/{owner}/{name}/pull/{number}",
+    }
+
+
+def parse_github_remote_url(remote_url: str) -> tuple[str, str] | None:
+    value = remote_url.strip()
+    for pattern in GITHUB_REMOTE_PATTERNS:
+        match = pattern.match(value)
+        if match:
+            owner, name = match.groups()
+            return owner, name
+    return None
+
+
+def github_repo_from_remote(repo: Path, remote: str = "origin") -> tuple[str, str] | None:
+    remote_url = git_value(repo, ["remote", "get-url", remote])
+    return parse_github_remote_url(remote_url) if remote_url else None
+
+
+def link_github_pr(
+    repo: Path,
+    identifier: str,
+    title: str | None = None,
+    base: str | None = None,
+    head: str | None = None,
+    remote: str = "origin",
+) -> dict[str, Any]:
+    _, run_dir, run_data = active_run(repo)
+    pr = parse_github_pr_identifier(identifier)
+    if "owner" not in pr or "repo" not in pr:
+        remote_repo = github_repo_from_remote(repo, remote)
+        if not remote_repo:
+            raise AgentTraceError(
+                f"Could not infer GitHub repository from remote `{remote}`. Pass a full GitHub PR URL instead."
+            )
+        pr["owner"], pr["repo"] = remote_repo
+        pr["url"] = f"https://github.com/{pr['owner']}/{pr['repo']}/pull/{pr['number']}"
+    if title:
+        pr["title"] = title
+    if base:
+        pr["base"] = base
+    if head:
+        pr["head"] = head
+    pr["linked_at"] = utc_now()
+    run_data["github_pr"] = pr
+    run_data["updated_at"] = pr["linked_at"]
+    write_json(run_dir / "run.json", run_data)
+    return pr
+
+
+def active_github_pr(repo: Path) -> dict[str, Any] | None:
+    _, _, run_data = active_run(repo)
+    pr = run_data.get("github_pr")
+    return pr if isinstance(pr, dict) else None
 
 
 def trace_path(repo: Path) -> Path:
@@ -246,6 +322,7 @@ def start_run(repo: Path, task: str, agent_tool: str | None = None, model: str |
         "prompt_contract_id": None,
         "review_score": None,
         "benchmark_task_id": None,
+        "github_pr": None,
         "snapshots": [],
         "tests": [],
         "reviews": [],
@@ -350,6 +427,7 @@ def report(repo: Path) -> Path:
     changed_files = latest.get("changed_files") or []
     tests = run_data.get("tests") or []
     reviews = run_data.get("reviews") or []
+    github_pr = run_data.get("github_pr")
     report_text = "\n".join(
         [
             f"# AgentTrace Report: {run_data.get('task', run_id)}",
@@ -361,6 +439,10 @@ def report(repo: Path) -> Path:
             f"- Git commit: `{(run_data.get('git') or {}).get('commit') or 'uncommitted/unborn'}`",
             f"- Agent tool: `{run_data.get('agent_tool') or 'not recorded'}`",
             f"- Model: `{run_data.get('model') or 'not recorded'}`",
+            "",
+            "## GitHub PR",
+            "",
+            _github_pr_markdown(github_pr),
             "",
             "## Changed Files",
             "",
@@ -406,6 +488,7 @@ def report(repo: Path) -> Path:
     )
     path = run_dir / "report.md"
     path.write_text(report_text, encoding="utf-8", newline="\n")
+    (run_dir / "pr-description.md").write_text(report_text, encoding="utf-8", newline="\n")
     return path
 
 
@@ -464,6 +547,18 @@ def _policy_markdown(result: dict[str, Any]) -> str:
         required = "required" if check["required"] else "optional"
         status = "pass" if check["passed"] else "fail"
         lines.append(f"- [{'x' if check['passed'] else ' '}] {check['name']} ({required}, {status})")
+    return "\n".join(lines)
+
+
+def _github_pr_markdown(pr: Any) -> str:
+    if not isinstance(pr, dict) or not pr:
+        return "No GitHub PR linked."
+    lines = [
+        f"- PR: [{pr.get('owner', 'unknown')}/{pr.get('repo', 'unknown')}#{pr.get('number', 'unknown')}]({pr.get('url', '')})",
+    ]
+    for key, label in (("title", "Title"), ("base", "Base"), ("head", "Head"), ("linked_at", "Linked")):
+        if pr.get(key):
+            lines.append(f"- {label}: `{pr[key]}`")
     return "\n".join(lines)
 
 

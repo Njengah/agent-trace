@@ -13,6 +13,7 @@ The MVP creates structured audit trails in a local Git workspace:
 - git status and diff snapshots
 - test/build command evidence
 - review notes
+- linked GitHub pull request metadata
 - Markdown report suitable for a PR description
 
 ## Install for Development
@@ -65,6 +66,12 @@ Append review notes:
 agenttrace add-review review-notes.md
 ```
 
+Link the active run to a GitHub pull request:
+
+```powershell
+agenttrace pr 123 --title "Add input validation" --base main --head feature/input-validation
+```
+
 Generate the final report:
 
 ```powershell
@@ -84,6 +91,7 @@ agenttrace report
       tests.md
       review.md
       report.md
+      pr-description.md
 ```
 
 ## MVP Limitations
@@ -91,7 +99,8 @@ agenttrace report
 - Evidence is local to the repository and not uploaded anywhere.
 - Test commands execute with the current user's shell environment.
 - The report truncates very large diffs for readability.
-- There is no dashboard, PR integration, or policy engine yet.
+- GitHub PR integration records local metadata only; it does not call the GitHub API.
+- There is no dashboard yet.
 
 ## Development
 
