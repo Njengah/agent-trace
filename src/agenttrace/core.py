@@ -13,6 +13,12 @@ from typing import Any
 SCHEMA_VERSION = "0.1"
 TRACE_DIR = ".agenttrace"
 CONFIG_NAME = "config.json"
+DEFAULT_EVIDENCE_POLICY = {
+    "require_tests": True,
+    "require_reviews": False,
+    "require_clean_snapshot": False,
+    "fail_on_failed_tests": True,
+}
 
 
 class AgentTraceError(Exception):
@@ -132,6 +138,33 @@ def write_config(repo: Path, config: dict[str, Any]) -> None:
     write_json(config_path(repo), config)
 
 
+def normalize_evidence_policy(policy: dict[str, Any] | None = None) -> dict[str, bool]:
+    normalized = dict(DEFAULT_EVIDENCE_POLICY)
+    if policy:
+        for key in normalized:
+            if key in policy:
+                normalized[key] = bool(policy[key])
+    return normalized
+
+
+def read_evidence_policy(repo: Path) -> dict[str, bool]:
+    config = read_config(repo)
+    return normalize_evidence_policy(config.get("evidence_policy"))
+
+
+def update_evidence_policy(repo: Path, updates: dict[str, bool]) -> dict[str, bool]:
+    config = read_config(repo)
+    policy = normalize_evidence_policy(config.get("evidence_policy"))
+    for key, value in updates.items():
+        if key not in policy:
+            raise AgentTraceError(f"Unknown evidence policy setting: {key}")
+        policy[key] = bool(value)
+    config["evidence_policy"] = policy
+    config["updated_at"] = utc_now()
+    write_config(repo, config)
+    return policy
+
+
 def active_run(repo: Path) -> tuple[str, Path, dict[str, Any]]:
     config = read_config(repo)
     run_id = config.get("active_run_id")
@@ -174,12 +207,14 @@ def init_workspace(repo: Path) -> Path:
         config.setdefault("project_name", repo.name)
         config.setdefault("created_at", utc_now())
         config.setdefault("active_run_id", None)
+        config["evidence_policy"] = normalize_evidence_policy(config.get("evidence_policy"))
     else:
         config = {
             "schema_version": SCHEMA_VERSION,
             "project_name": repo.name,
             "created_at": utc_now(),
             "active_run_id": None,
+            "evidence_policy": normalize_evidence_policy(),
         }
     write_config(repo, config)
     return path
@@ -305,6 +340,8 @@ def add_review(repo: Path, review_file: Path) -> Path:
 
 def report(repo: Path) -> Path:
     run_id, run_dir, run_data = active_run(repo)
+    policy = read_evidence_policy(repo)
+    policy_result = evaluate_evidence_policy(run_data, policy)
     status_text = _read_optional(run_dir / "status.txt", "No status snapshot recorded.")
     diff_text = _read_optional(run_dir / "diff.patch", "No diff snapshot recorded.")
     tests_text = _read_optional(run_dir / "tests.md", "No test evidence recorded.")
@@ -349,9 +386,13 @@ def report(repo: Path) -> Path:
             "",
             review_text.rstrip(),
             "",
+            "## Evidence Policy",
+            "",
+            _policy_markdown(policy_result),
+            "",
             "## Risk Notes",
             "",
-            _risk_notes(latest, tests, reviews),
+            _risk_notes(latest, tests, reviews, policy_result),
             "",
             "## Final Evidence Checklist",
             "",
@@ -368,6 +409,42 @@ def report(repo: Path) -> Path:
     return path
 
 
+def evaluate_evidence_policy(run_data: dict[str, Any], policy: dict[str, bool] | None = None) -> dict[str, Any]:
+    active_policy = normalize_evidence_policy(policy)
+    latest = run_data.get("latest_snapshot") or {}
+    tests = run_data.get("tests") or []
+    reviews = run_data.get("reviews") or []
+    checks = [
+        {
+            "name": "test evidence recorded",
+            "required": active_policy["require_tests"],
+            "passed": bool(tests),
+        },
+        {
+            "name": "review evidence recorded",
+            "required": active_policy["require_reviews"],
+            "passed": bool(reviews),
+        },
+        {
+            "name": "latest snapshot clean",
+            "required": active_policy["require_clean_snapshot"],
+            "passed": latest.get("dirty") is False,
+        },
+        {
+            "name": "recorded tests passed",
+            "required": active_policy["fail_on_failed_tests"] and bool(tests),
+            "passed": not any(test.get("exit_code") not in (0, None) for test in tests),
+        },
+    ]
+    failures = [check for check in checks if check["required"] and not check["passed"]]
+    return {
+        "policy": active_policy,
+        "passed": not failures,
+        "checks": checks,
+        "failures": failures,
+    }
+
+
 def _read_optional(path: Path, fallback: str) -> str:
     if not path.exists():
         return fallback
@@ -381,8 +458,25 @@ def _bullet_list(items: list[str], fallback: str) -> str:
     return "\n".join(f"- `{item}`" for item in items)
 
 
-def _risk_notes(snapshot_data: dict[str, Any], tests: list[dict[str, Any]], reviews: list[dict[str, Any]]) -> str:
+def _policy_markdown(result: dict[str, Any]) -> str:
+    lines = [f"Status: `{'pass' if result['passed'] else 'fail'}`", ""]
+    for check in result["checks"]:
+        required = "required" if check["required"] else "optional"
+        status = "pass" if check["passed"] else "fail"
+        lines.append(f"- [{'x' if check['passed'] else ' '}] {check['name']} ({required}, {status})")
+    return "\n".join(lines)
+
+
+def _risk_notes(
+    snapshot_data: dict[str, Any],
+    tests: list[dict[str, Any]],
+    reviews: list[dict[str, Any]],
+    policy_result: dict[str, Any] | None = None,
+) -> str:
     notes: list[str] = []
+    if policy_result and not policy_result.get("passed"):
+        failed = ", ".join(check["name"] for check in policy_result.get("failures", []))
+        notes.append(f"- Evidence policy failed: {failed}.")
     if snapshot_data.get("dirty"):
         notes.append("- Working tree had uncommitted changes when snapshot was captured.")
     if not tests:

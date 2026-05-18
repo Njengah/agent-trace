@@ -12,9 +12,11 @@ from .core import (
     add_test,
     git_root,
     init_workspace,
+    read_evidence_policy,
     report,
     snapshot,
     start_run,
+    update_evidence_policy,
     workspace_repo_from_cwd,
 )
 
@@ -48,6 +50,17 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser = subcommands.add_parser("add-review", help="Append review notes from a file to the active run.")
     review_parser.add_argument("file", help="Path to a Markdown/text review file.")
     review_parser.set_defaults(func=cmd_add_review)
+
+    policy_parser = subcommands.add_parser("policy", help="Show or update evidence policy requirements.")
+    policy_parser.add_argument("--require-tests", action="store_true", default=None, help="Require test evidence.")
+    policy_parser.add_argument("--no-require-tests", action="store_false", dest="require_tests", help="Do not require test evidence.")
+    policy_parser.add_argument("--require-reviews", action="store_true", default=None, help="Require review evidence.")
+    policy_parser.add_argument("--no-require-reviews", action="store_false", dest="require_reviews", help="Do not require review evidence.")
+    policy_parser.add_argument("--require-clean-snapshot", action="store_true", default=None, help="Require the latest snapshot to be clean.")
+    policy_parser.add_argument("--no-require-clean-snapshot", action="store_false", dest="require_clean_snapshot", help="Do not require a clean latest snapshot.")
+    policy_parser.add_argument("--fail-on-failed-tests", action="store_true", default=None, help="Fail policy when recorded tests fail.")
+    policy_parser.add_argument("--allow-failed-tests", action="store_false", dest="fail_on_failed_tests", help="Do not fail policy when recorded tests fail.")
+    policy_parser.set_defaults(func=cmd_policy)
 
     report_parser = subcommands.add_parser("report", help="Generate a Markdown report for the active run.")
     report_parser.set_defaults(func=cmd_report)
@@ -88,6 +101,25 @@ def cmd_add_review(args: argparse.Namespace) -> int:
     repo = workspace_repo_from_cwd()
     run_dir = add_review(repo, Path(args.file))
     print(f"Review evidence recorded: {run_dir / 'review.md'}")
+    return 0
+
+
+def cmd_policy(args: argparse.Namespace) -> int:
+    repo = workspace_repo_from_cwd()
+    updates = {
+        key: value
+        for key, value in {
+            "require_tests": args.require_tests,
+            "require_reviews": args.require_reviews,
+            "require_clean_snapshot": args.require_clean_snapshot,
+            "fail_on_failed_tests": args.fail_on_failed_tests,
+        }.items()
+        if value is not None
+    }
+    policy = update_evidence_policy(repo, updates) if updates else read_evidence_policy(repo)
+    print("Evidence policy:")
+    for key in sorted(policy):
+        print(f"- {key}: {str(policy[key]).lower()}")
     return 0
 
 
