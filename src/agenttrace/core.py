@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+from html import escape
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -492,6 +493,76 @@ def report(repo: Path) -> Path:
     return path
 
 
+def list_runs(repo: Path) -> list[dict[str, Any]]:
+    read_config(repo)
+    runs: list[dict[str, Any]] = []
+    root = runs_path(repo)
+    if not root.exists():
+        return runs
+    for run_file in root.glob("*/run.json"):
+        try:
+            run_data = read_json(run_file)
+        except AgentTraceError:
+            continue
+        run_data["_run_dir"] = str(run_file.parent)
+        runs.append(run_data)
+    return sorted(runs, key=lambda run: str(run.get("updated_at") or run.get("created_at") or ""), reverse=True)
+
+
+def dashboard(repo: Path) -> Path:
+    policy = read_evidence_policy(repo)
+    runs = list_runs(repo)
+    active_id = read_config(repo).get("active_run_id")
+    cards = [_run_dashboard_card(run, policy, str(run.get("run_id")) == str(active_id)) for run in runs]
+    policy_failures = sum(1 for run in runs if not evaluate_evidence_policy(run, policy)["passed"])
+    linked_prs = sum(1 for run in runs if isinstance(run.get("github_pr"), dict) and run.get("github_pr"))
+    total_tests = sum(len(run.get("tests") or []) for run in runs)
+    html = "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            f"<title>AgentTrace Dashboard - {escape(repo.name)}</title>",
+            "<style>",
+            _dashboard_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            '<section class="header">',
+            "<div>",
+            f"<p>AgentTrace</p><h1>{escape(repo.name)}</h1>",
+            f"<span>Generated {escape(utc_now())}</span>",
+            "</div>",
+            '<div class="summary-grid">',
+            _summary_tile("Runs", len(runs)),
+            _summary_tile("Policy Failures", policy_failures),
+            _summary_tile("Test Records", total_tests),
+            _summary_tile("Linked PRs", linked_prs),
+            "</div>",
+            "</section>",
+            '<section class="policy">',
+            "<h2>Evidence Policy</h2>",
+            '<div class="policy-grid">',
+            *[_policy_chip(key, value) for key, value in sorted(policy.items())],
+            "</div>",
+            "</section>",
+            '<section class="runs">',
+            "<h2>Runs</h2>",
+            "\n".join(cards) if cards else '<p class="empty">No AgentTrace runs recorded yet.</p>',
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+    path = trace_path(repo) / "dashboard.html"
+    path.write_text(html, encoding="utf-8", newline="\n")
+    return path
+
+
 def evaluate_evidence_policy(run_data: dict[str, Any], policy: dict[str, bool] | None = None) -> dict[str, Any]:
     active_policy = normalize_evidence_policy(policy)
     latest = run_data.get("latest_snapshot") or {}
@@ -526,6 +597,233 @@ def evaluate_evidence_policy(run_data: dict[str, Any], policy: dict[str, bool] |
         "checks": checks,
         "failures": failures,
     }
+
+
+def _run_dashboard_card(run: dict[str, Any], policy: dict[str, bool], active: bool) -> str:
+    result = evaluate_evidence_policy(run, policy)
+    latest = run.get("latest_snapshot") or {}
+    changed_files = latest.get("changed_files") or []
+    tests = run.get("tests") or []
+    reviews = run.get("reviews") or []
+    git_data = run.get("git") or {}
+    pr = run.get("github_pr")
+    status_class = "pass" if result["passed"] else "fail"
+    status_label = "Policy pass" if result["passed"] else "Policy fail"
+    test_failures = sum(1 for test in tests if test.get("exit_code") not in (0, None))
+    failure_text = ", ".join(failure["name"] for failure in result["failures"]) or "No required evidence gaps."
+    changed_text = ", ".join(changed_files[:6])
+    if len(changed_files) > 6:
+        changed_text += f", +{len(changed_files) - 6} more"
+    pr_text = _dashboard_pr_link(pr)
+    return "\n".join(
+        [
+            f'<article class="run-card {status_class}">',
+            '<div class="run-topline">',
+            "<div>",
+            f"<h3>{escape(str(run.get('task') or run.get('run_id') or 'Untitled run'))}</h3>",
+            f"<p>{escape(str(run.get('run_id') or 'unknown'))}</p>",
+            "</div>",
+            f'<span class="badge {status_class}">{escape(status_label)}</span>',
+            "</div>",
+            '<div class="meta-grid">',
+            _meta_item("Updated", run.get("updated_at") or "unknown"),
+            _meta_item("Branch", git_data.get("branch") or "unknown"),
+            _meta_item("Tests", f"{len(tests)} recorded, {test_failures} failed"),
+            _meta_item("Reviews", len(reviews)),
+            _meta_item("Snapshot", "dirty" if latest.get("dirty") else "clean" if latest else "missing"),
+            _meta_item("Active", "yes" if active else "no"),
+            "</div>",
+            f'<p class="detail"><strong>PR</strong> {pr_text}</p>',
+            f'<p class="detail"><strong>Changed</strong> {escape(changed_text or "No changed files captured.")}</p>',
+            f'<p class="detail"><strong>Policy</strong> {escape(failure_text)}</p>',
+            "</article>",
+        ]
+    )
+
+
+def _summary_tile(label: str, value: int) -> str:
+    return f'<div class="summary-tile"><span>{escape(label)}</span><strong>{value}</strong></div>'
+
+
+def _policy_chip(key: str, value: bool) -> str:
+    return f'<span class="policy-chip"><strong>{escape(key)}</strong> {str(value).lower()}</span>'
+
+
+def _meta_item(label: str, value: Any) -> str:
+    return f'<div class="meta-item"><span>{escape(label)}</span><strong>{escape(str(value))}</strong></div>'
+
+
+def _dashboard_pr_link(pr: Any) -> str:
+    if not isinstance(pr, dict) or not pr:
+        return "No linked PR."
+    label = f"{pr.get('owner', 'unknown')}/{pr.get('repo', 'unknown')}#{pr.get('number', 'unknown')}"
+    url = str(pr.get("url") or "")
+    if not url:
+        return escape(label)
+    return f'<a href="{escape(url, quote=True)}">{escape(label)}</a>'
+
+
+def _dashboard_css() -> str:
+    return """
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #1f2933;
+  --muted: #617080;
+  --line: #d9e0e7;
+  --accent: #2563eb;
+  --ok: #0f766e;
+  --bad: #b42318;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Arial, Helvetica, sans-serif;
+}
+main {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0;
+}
+.header {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(300px, 620px);
+  gap: 24px;
+  align-items: end;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+.header p {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+h1, h2, h3 { margin: 0; letter-spacing: 0; }
+h1 { font-size: 38px; line-height: 1.08; }
+h2 { font-size: 19px; margin: 28px 0 14px; }
+h3 { font-size: 17px; line-height: 1.35; }
+.header span, .run-topline p, .detail, .meta-item span, .summary-tile span {
+  color: var(--muted);
+}
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.summary-tile, .run-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.summary-tile {
+  min-height: 86px;
+  padding: 14px;
+}
+.summary-tile strong {
+  display: block;
+  margin-top: 10px;
+  font-size: 28px;
+}
+.policy-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.policy-chip, .badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.policy-chip {
+  gap: 8px;
+  background: #eef4ff;
+  border: 1px solid #c9d8ff;
+}
+.runs {
+  display: grid;
+  gap: 12px;
+}
+.run-card {
+  padding: 16px;
+  border-left-width: 5px;
+}
+.run-card.pass { border-left-color: var(--ok); }
+.run-card.fail { border-left-color: var(--bad); }
+.run-topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.run-topline p {
+  margin: 5px 0 0;
+  font-size: 13px;
+  word-break: break-word;
+}
+.badge.pass {
+  color: var(--ok);
+  background: #e6f4f1;
+}
+.badge.fail {
+  color: var(--bad);
+  background: #fff0ed;
+}
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 16px;
+}
+.meta-item {
+  min-height: 62px;
+  padding: 10px;
+  background: #f9fafb;
+  border: 1px solid #edf1f5;
+  border-radius: 6px;
+}
+.meta-item span, .summary-tile span {
+  display: block;
+  font-size: 12px;
+}
+.meta-item strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.detail {
+  margin: 12px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+a { color: var(--accent); }
+.empty {
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+@media (max-width: 860px) {
+  .header { grid-template-columns: 1fr; }
+  .summary-grid, .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  main { width: min(100% - 20px, 1180px); padding: 20px 0; }
+  h1 { font-size: 30px; }
+  .summary-grid, .meta-grid { grid-template-columns: 1fr; }
+  .run-topline { flex-direction: column; }
+  .badge { width: fit-content; }
+}
+""".strip()
 
 
 def _read_optional(path: Path, fallback: str) -> str:

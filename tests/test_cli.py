@@ -134,6 +134,26 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("Could not infer GitHub repository", result.stderr)
 
+    def test_dashboard_generates_html_summary(self) -> None:
+        self.run_git("remote", "add", "origin", "https://github.com/acme/widgets.git")
+        self.assertEqual(self.run_cli("init").returncode, 0)
+        self.assertEqual(self.run_cli("start", "dashboard run", "--tool", "Codex").returncode, 0)
+        (self.repo / "README.md").write_text("# temp\n\nchanged\n", encoding="utf-8")
+        self.assertEqual(self.run_cli("snapshot").returncode, 0)
+        self.assertEqual(self.run_cli("add-test", f'"{sys.executable}" -c "print(123)"').returncode, 0)
+        self.assertEqual(self.run_cli("pr", "7", "--title", "Dashboard PR").returncode, 0)
+
+        result = self.run_cli("dashboard")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        dashboard_path = Path(result.stdout.strip())
+        self.assertEqual(dashboard_path.name, "dashboard.html")
+        html = dashboard_path.read_text(encoding="utf-8")
+        self.assertIn("<h1>", html)
+        self.assertIn("dashboard run", html)
+        self.assertIn("Policy pass", html)
+        self.assertIn("acme/widgets#7", html)
+        self.assertIn("README.md", html)
+
     def test_start_requires_init(self) -> None:
         result = self.run_cli("start", "missing init")
         self.assertEqual(result.returncode, 2)

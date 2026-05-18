@@ -15,6 +15,7 @@ The MVP creates structured audit trails in a local Git workspace:
 - review notes
 - linked GitHub pull request metadata
 - Markdown report suitable for a PR description
+- local HTML dashboard across recorded runs
 
 ## Install for Development
 
@@ -78,10 +79,17 @@ Generate the final report:
 agenttrace report
 ```
 
+Generate a local dashboard:
+
+```powershell
+agenttrace dashboard
+```
+
 ## Output Structure
 
 ```text
 .agenttrace/
+  dashboard.html
   config.json
   runs/
     20260518-120000-add-input-validation/
@@ -100,14 +108,14 @@ agenttrace report
 - Test commands execute with the current user's shell environment.
 - The report truncates very large diffs for readability.
 - GitHub PR integration records local metadata only; it does not call the GitHub API.
-- There is no dashboard yet.
+- The dashboard is a static local HTML file, not a hosted web service.
 
 ## Development
 
 Run the test suite:
 
 ```powershell
-python -m unittest discover -s tests
+$env:PYTHONPATH='src'; python -m unittest discover -s tests
 ```
 
 See `docs/workflow.md` for a complete example workflow.

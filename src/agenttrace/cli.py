@@ -11,6 +11,7 @@ from .core import (
     add_review,
     add_test,
     active_github_pr,
+    dashboard,
     git_root,
     init_workspace,
     link_github_pr,
@@ -74,6 +75,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     report_parser = subcommands.add_parser("report", help="Generate a Markdown report for the active run.")
     report_parser.set_defaults(func=cmd_report)
+
+    dashboard_parser = subcommands.add_parser("dashboard", help="Generate a local HTML dashboard for AgentTrace runs.")
+    dashboard_parser.set_defaults(func=cmd_dashboard)
     return parser
 
 
@@ -163,6 +167,13 @@ def cmd_pr(args: argparse.Namespace) -> int:
 def cmd_report(args: argparse.Namespace) -> int:
     repo = workspace_repo_from_cwd()
     path = report(repo)
+    print(path)
+    return 0
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    repo = workspace_repo_from_cwd()
+    path = dashboard(repo)
     print(path)
     return 0
 
