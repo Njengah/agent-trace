@@ -11,6 +11,8 @@ from agenttrace.core import (
     evaluate_evidence_policy,
     generate_run_id,
     normalize_evidence_policy,
+    parse_github_pr_identifier,
+    parse_github_remote_url,
     read_json,
     write_json,
 )
@@ -70,6 +72,24 @@ class CoreTests(unittest.TestCase):
             [failure["name"] for failure in result["failures"]],
             ["review evidence recorded", "latest snapshot clean", "recorded tests passed"],
         )
+
+    def test_parse_github_pr_identifier_accepts_number_or_url(self) -> None:
+        self.assertEqual(parse_github_pr_identifier("42"), {"number": 42})
+        self.assertEqual(
+            parse_github_pr_identifier("https://github.com/acme/widgets/pull/42"),
+            {
+                "owner": "acme",
+                "repo": "widgets",
+                "number": 42,
+                "url": "https://github.com/acme/widgets/pull/42",
+            },
+        )
+
+    def test_parse_github_remote_url_supports_common_formats(self) -> None:
+        self.assertEqual(parse_github_remote_url("https://github.com/acme/widgets.git"), ("acme", "widgets"))
+        self.assertEqual(parse_github_remote_url("git@github.com:acme/widgets.git"), ("acme", "widgets"))
+        self.assertEqual(parse_github_remote_url("ssh://git@github.com/acme/widgets.git"), ("acme", "widgets"))
+        self.assertIsNone(parse_github_remote_url("https://example.com/acme/widgets.git"))
 
 
 if __name__ == "__main__":

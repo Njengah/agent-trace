@@ -105,6 +105,35 @@ class CliTests(unittest.TestCase):
         self.assertIn("Status: `fail`", text)
         self.assertIn("Evidence policy failed", text)
 
+    def test_pr_command_links_github_metadata_into_report(self) -> None:
+        self.run_git("remote", "add", "origin", "git@github.com:acme/widgets.git")
+        self.assertEqual(self.run_cli("init").returncode, 0)
+        self.assertEqual(self.run_cli("start", "github pr").returncode, 0)
+
+        result = self.run_cli("pr", "42", "--title", "Add widgets", "--base", "main", "--head", "feature/widgets")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("https://github.com/acme/widgets/pull/42", result.stdout)
+
+        result = self.run_cli("pr")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("GitHub PR: https://github.com/acme/widgets/pull/42", result.stdout)
+        self.assertIn("Title: Add widgets", result.stdout)
+
+        result = self.run_cli("report")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report_path = Path(result.stdout.strip())
+        text = report_path.read_text(encoding="utf-8")
+        self.assertIn("## GitHub PR", text)
+        self.assertIn("[acme/widgets#42](https://github.com/acme/widgets/pull/42)", text)
+        self.assertTrue((report_path.parent / "pr-description.md").exists())
+
+    def test_pr_number_requires_github_remote(self) -> None:
+        self.assertEqual(self.run_cli("init").returncode, 0)
+        self.assertEqual(self.run_cli("start", "github pr").returncode, 0)
+        result = self.run_cli("pr", "42")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Could not infer GitHub repository", result.stderr)
+
     def test_start_requires_init(self) -> None:
         result = self.run_cli("start", "missing init")
         self.assertEqual(result.returncode, 2)
