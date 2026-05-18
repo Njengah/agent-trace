@@ -7,7 +7,9 @@ from pathlib import Path
 from . import __version__
 from .core import (
     AgentTraceError,
+    active_evaluations,
     add_project_root,
+    add_evaluation,
     add_review,
     add_test,
     active_github_pr,
@@ -72,6 +74,18 @@ def build_parser() -> argparse.ArgumentParser:
     pr_parser.add_argument("--head", help="Optional head branch to store in the run metadata.")
     pr_parser.add_argument("--remote", default="origin", help="Git remote used when identifier is a number.")
     pr_parser.set_defaults(func=cmd_pr)
+
+    eval_parser = subcommands.add_parser("eval", help="Record or show EvalOps benchmark evidence for the active run.")
+    eval_parser.add_argument("benchmark_task_id", nargs="?", help="Benchmark or evaluation task ID.")
+    eval_parser.add_argument("--score", type=float, help="Evaluation score from 0 to 100.")
+    eval_parser.add_argument(
+        "--regression",
+        choices=("passed", "failed", "unknown"),
+        default="unknown",
+        help="Regression result for the benchmark.",
+    )
+    eval_parser.add_argument("--note", help="Optional evaluation note.")
+    eval_parser.set_defaults(func=cmd_eval)
 
     report_parser = subcommands.add_parser("report", help="Generate a Markdown report for the active run.")
     report_parser.set_defaults(func=cmd_report)
@@ -161,6 +175,33 @@ def cmd_pr(args: argparse.Namespace) -> int:
         print(f"Base: {pr['base']}")
     if pr.get("head"):
         print(f"Head: {pr['head']}")
+    return 0
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    repo = workspace_repo_from_cwd()
+    if args.benchmark_task_id:
+        evaluation = add_evaluation(
+            repo,
+            args.benchmark_task_id,
+            score=args.score,
+            regression_status=args.regression,
+            note=args.note,
+        )
+        print(f"Recorded EvalOps evidence: {evaluation['benchmark_task_id']}")
+        return 0
+    evaluations = active_evaluations(repo)
+    if not evaluations:
+        print("No EvalOps evidence recorded.")
+        return 0
+    print("EvalOps evidence:")
+    for evaluation in evaluations:
+        score = evaluation.get("score")
+        score_text = score if score is not None else "not recorded"
+        print(
+            f"- {evaluation.get('benchmark_task_id', 'unknown')}: "
+            f"score={score_text}, regression={evaluation.get('regression_status', 'unknown')}"
+        )
     return 0
 
 

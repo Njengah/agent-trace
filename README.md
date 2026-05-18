@@ -14,6 +14,7 @@ The MVP creates structured audit trails in a local Git workspace:
 - test/build command evidence
 - review notes
 - linked GitHub pull request metadata
+- EvalOps benchmark and regression evidence
 - Markdown report suitable for a PR description
 - local HTML dashboard across recorded runs
 
@@ -73,6 +74,12 @@ Link the active run to a GitHub pull request:
 agenttrace pr 123 --title "Add input validation" --base main --head feature/input-validation
 ```
 
+Record evaluation evidence:
+
+```powershell
+agenttrace eval benchmark-42 --score 94.5 --regression passed --note "No benchmark regression."
+```
+
 Generate the final report:
 
 ```powershell
@@ -108,6 +115,7 @@ agenttrace dashboard
 - Test commands execute with the current user's shell environment.
 - The report truncates very large diffs for readability.
 - GitHub PR integration records local metadata only; it does not call the GitHub API.
+- EvalOps integration records local benchmark metadata only; it does not call an external eval service.
 - The dashboard is a static local HTML file, not a hosted web service.
 
 ## Development
