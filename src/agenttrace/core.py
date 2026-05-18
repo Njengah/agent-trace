@@ -169,6 +169,43 @@ def active_github_pr(repo: Path) -> dict[str, Any] | None:
     return pr if isinstance(pr, dict) else None
 
 
+def add_evaluation(
+    repo: Path,
+    benchmark_task_id: str,
+    score: float | None = None,
+    regression_status: str = "unknown",
+    note: str | None = None,
+) -> dict[str, Any]:
+    if not benchmark_task_id.strip():
+        raise AgentTraceError("Benchmark task ID cannot be empty.")
+    if score is not None and not 0 <= score <= 100:
+        raise AgentTraceError("Evaluation score must be between 0 and 100.")
+    if regression_status not in {"passed", "failed", "unknown"}:
+        raise AgentTraceError("Regression status must be one of: passed, failed, unknown.")
+    _, run_dir, run_data = active_run(repo)
+    timestamp = utc_now()
+    entry = {
+        "benchmark_task_id": benchmark_task_id.strip(),
+        "score": score,
+        "regression_status": regression_status,
+        "note": note,
+        "timestamp": timestamp,
+    }
+    run_data.setdefault("evaluations", []).append(entry)
+    run_data["benchmark_task_id"] = entry["benchmark_task_id"]
+    run_data["review_score"] = score
+    run_data["latest_evaluation"] = entry
+    run_data["updated_at"] = timestamp
+    write_json(run_dir / "run.json", run_data)
+    return entry
+
+
+def active_evaluations(repo: Path) -> list[dict[str, Any]]:
+    _, _, run_data = active_run(repo)
+    evaluations = run_data.get("evaluations") or []
+    return [item for item in evaluations if isinstance(item, dict)]
+
+
 def trace_path(repo: Path) -> Path:
     return repo / TRACE_DIR
 
@@ -324,6 +361,7 @@ def start_run(repo: Path, task: str, agent_tool: str | None = None, model: str |
         "review_score": None,
         "benchmark_task_id": None,
         "github_pr": None,
+        "evaluations": [],
         "snapshots": [],
         "tests": [],
         "reviews": [],
@@ -429,6 +467,7 @@ def report(repo: Path) -> Path:
     tests = run_data.get("tests") or []
     reviews = run_data.get("reviews") or []
     github_pr = run_data.get("github_pr")
+    evaluations = run_data.get("evaluations") or []
     report_text = "\n".join(
         [
             f"# AgentTrace Report: {run_data.get('task', run_id)}",
@@ -444,6 +483,10 @@ def report(repo: Path) -> Path:
             "## GitHub PR",
             "",
             _github_pr_markdown(github_pr),
+            "",
+            "## EvalOps Evidence",
+            "",
+            _evaluations_markdown(evaluations),
             "",
             "## Changed Files",
             "",
@@ -516,6 +559,7 @@ def dashboard(repo: Path) -> Path:
     cards = [_run_dashboard_card(run, policy, str(run.get("run_id")) == str(active_id)) for run in runs]
     policy_failures = sum(1 for run in runs if not evaluate_evidence_policy(run, policy)["passed"])
     linked_prs = sum(1 for run in runs if isinstance(run.get("github_pr"), dict) and run.get("github_pr"))
+    eval_runs = sum(1 for run in runs if run.get("evaluations"))
     total_tests = sum(len(run.get("tests") or []) for run in runs)
     html = "\n".join(
         [
@@ -541,6 +585,7 @@ def dashboard(repo: Path) -> Path:
             _summary_tile("Policy Failures", policy_failures),
             _summary_tile("Test Records", total_tests),
             _summary_tile("Linked PRs", linked_prs),
+            _summary_tile("Eval Runs", eval_runs),
             "</div>",
             "</section>",
             '<section class="policy">',
@@ -607,6 +652,8 @@ def _run_dashboard_card(run: dict[str, Any], policy: dict[str, bool], active: bo
     reviews = run.get("reviews") or []
     git_data = run.get("git") or {}
     pr = run.get("github_pr")
+    evaluations = run.get("evaluations") or []
+    latest_eval = run.get("latest_evaluation") or (evaluations[-1] if evaluations else None)
     status_class = "pass" if result["passed"] else "fail"
     status_label = "Policy pass" if result["passed"] else "Policy fail"
     test_failures = sum(1 for test in tests if test.get("exit_code") not in (0, None))
@@ -630,10 +677,12 @@ def _run_dashboard_card(run: dict[str, Any], policy: dict[str, bool], active: bo
             _meta_item("Branch", git_data.get("branch") or "unknown"),
             _meta_item("Tests", f"{len(tests)} recorded, {test_failures} failed"),
             _meta_item("Reviews", len(reviews)),
+            _meta_item("Evaluations", len(evaluations)),
             _meta_item("Snapshot", "dirty" if latest.get("dirty") else "clean" if latest else "missing"),
             _meta_item("Active", "yes" if active else "no"),
             "</div>",
             f'<p class="detail"><strong>PR</strong> {pr_text}</p>',
+            f'<p class="detail"><strong>EvalOps</strong> {_dashboard_eval_text(latest_eval)}</p>',
             f'<p class="detail"><strong>Changed</strong> {escape(changed_text or "No changed files captured.")}</p>',
             f'<p class="detail"><strong>Policy</strong> {escape(failure_text)}</p>',
             "</article>",
@@ -858,6 +907,42 @@ def _github_pr_markdown(pr: Any) -> str:
         if pr.get(key):
             lines.append(f"- {label}: `{pr[key]}`")
     return "\n".join(lines)
+
+
+def _evaluations_markdown(evaluations: Any) -> str:
+    if not isinstance(evaluations, list) or not evaluations:
+        return "No EvalOps evidence recorded."
+    lines: list[str] = []
+    for evaluation in evaluations:
+        if not isinstance(evaluation, dict):
+            continue
+        score = evaluation.get("score")
+        lines.extend(
+            [
+                f"### Benchmark `{evaluation.get('benchmark_task_id', 'unknown')}`",
+                "",
+                f"- Recorded: `{evaluation.get('timestamp', 'unknown')}`",
+                f"- Score: `{score if score is not None else 'not recorded'}`",
+                f"- Regression: `{evaluation.get('regression_status', 'unknown')}`",
+            ]
+        )
+        if evaluation.get("note"):
+            lines.append(f"- Note: {evaluation['note']}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def _dashboard_eval_text(evaluation: Any) -> str:
+    if not isinstance(evaluation, dict) or not evaluation:
+        return "No evaluation recorded."
+    score = evaluation.get("score")
+    parts = [
+        escape(str(evaluation.get("benchmark_task_id") or "unknown benchmark")),
+        f"regression {escape(str(evaluation.get('regression_status') or 'unknown'))}",
+    ]
+    if score is not None:
+        parts.insert(1, f"score {escape(str(score))}")
+    return ", ".join(parts)
 
 
 def _risk_notes(

@@ -154,6 +154,38 @@ class CliTests(unittest.TestCase):
         self.assertIn("acme/widgets#7", html)
         self.assertIn("README.md", html)
 
+    def test_eval_command_records_report_and_dashboard_evidence(self) -> None:
+        self.assertEqual(self.run_cli("init").returncode, 0)
+        self.assertEqual(self.run_cli("start", "evalops run").returncode, 0)
+
+        result = self.run_cli("eval", "bench-123", "--score", "91.5", "--regression", "passed", "--note", "No regression.")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Recorded EvalOps evidence: bench-123", result.stdout)
+
+        result = self.run_cli("eval")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("bench-123: score=91.5, regression=passed", result.stdout)
+
+        result = self.run_cli("report")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report_text = Path(result.stdout.strip()).read_text(encoding="utf-8")
+        self.assertIn("## EvalOps Evidence", report_text)
+        self.assertIn("Benchmark `bench-123`", report_text)
+        self.assertIn("- Score: `91.5`", report_text)
+
+        result = self.run_cli("dashboard")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        html = Path(result.stdout.strip()).read_text(encoding="utf-8")
+        self.assertIn("Eval Runs", html)
+        self.assertIn("bench-123", html)
+
+    def test_eval_score_must_be_in_range(self) -> None:
+        self.assertEqual(self.run_cli("init").returncode, 0)
+        self.assertEqual(self.run_cli("start", "evalops run").returncode, 0)
+        result = self.run_cli("eval", "bench-123", "--score", "101")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("score must be between 0 and 100", result.stderr)
+
     def test_start_requires_init(self) -> None:
         result = self.run_cli("start", "missing init")
         self.assertEqual(result.returncode, 2)
