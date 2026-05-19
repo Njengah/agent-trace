@@ -24,10 +24,12 @@ git --version
 
 ## Install From This Project Folder
 
-Open PowerShell in the AgentTrace project folder:
+Open PowerShell in the AgentTrace project folder.
+
+Use the folder where you cloned or downloaded AgentTrace. For example:
 
 ```powershell
-cd C:\Users\User\codex\profile\agenttrace
+cd path\to\agenttrace
 ```
 
 Install AgentTrace for development:
@@ -73,4 +75,3 @@ If everything is working, you should see output ending with:
 ```text
 OK
 ```
-
