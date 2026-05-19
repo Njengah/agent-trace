@@ -7,12 +7,12 @@ __pycache__/
 .coverage
 dist/
 build/
+site/
 .venv/
 venv/
 .git/
 .gitlocal/
 .agenttrace/
 .tmp-smoke/
-/docs
 /idea.md
 /start_prompt.md

@@ -1,0 +1,37 @@
+site_name: AgentTrace
+site_description: Beginner-friendly documentation for AgentTrace
+site_url: https://njengah.github.io/agent-trace/
+repo_url: https://github.com/Njengah/agent-trace
+repo_name: Njengah/agent-trace
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Beginner Guides:
+      - Start Here: user-guides/README.md
+      - What AgentTrace Does: user-guides/what-agenttrace-does.md
+      - Install And Run: user-guides/install-and-run.md
+      - Your First Trace: user-guides/your-first-trace.md
+      - Daily Workflow: user-guides/daily-workflow.md
+      - Command Cheat Sheet: user-guides/command-cheat-sheet.md
+      - Troubleshooting: user-guides/troubleshooting.md
+      - Glossary: user-guides/glossary.md
+  - Project Notes:
+      - Workflow: workflow.md
+      - Product: product.md
+      - Architecture: architecture.md
+      - Data Model: data-model.md
+      - Roadmap: future-roadmap.md

@@ -127,3 +127,7 @@ $env:PYTHONPATH='src'; python -m unittest discover -s tests
 ```
 
 See `docs/workflow.md` for a complete example workflow.
+
+## Beginner User Guides
+
+If you are new to AgentTrace, start with the beginner guides in [`docs/user-guides/README.md`](docs/user-guides/README.md).
